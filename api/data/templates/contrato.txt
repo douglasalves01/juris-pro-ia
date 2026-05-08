@@ -1,0 +1,13 @@
+CONTRATO
+
+PARTES
+{parties}
+
+OBJETO
+{subject}
+
+CONDIÇÕES PRINCIPAIS
+{facts}
+
+OBRIGAÇÕES E DISPOSIÇÕES FINAIS
+{claims}

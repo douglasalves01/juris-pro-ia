@@ -1,0 +1,24 @@
+{
+  "regulation": "CLT",
+  "area_keywords": ["trabalhista", "empregado", "empregador", "verbas rescisorias", "jornada", "clt"],
+  "items": [
+    {
+      "id": "clt_jornada",
+      "description": "Descreve jornada de trabalho e controle de horas.",
+      "required": ["jornada", "horas extras", "controle de ponto", "banco de horas"],
+      "optional": ["empregado", "empregador"]
+    },
+    {
+      "id": "clt_remuneracao",
+      "description": "Indica remuneracao, beneficios ou verbas devidas.",
+      "required": ["salario", "remuneracao", "beneficios", "verbas rescisorias"],
+      "optional": ["fgts", "decimo terceiro", "ferias"]
+    },
+    {
+      "id": "clt_vinculo",
+      "description": "Aborda elementos de vinculo empregaticio quando pertinentes.",
+      "required": ["subordinacao", "pessoalidade", "habitualidade", "onerosidade", "vinculo empregaticio"],
+      "optional": ["prestacao de servicos", "empregado"]
+    }
+  ]
+}

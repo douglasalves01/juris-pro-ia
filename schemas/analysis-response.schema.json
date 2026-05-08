@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jurispro.local/schemas/analysis-response.schema.json",
+  "title": "JurisPro AI Analysis Response",
+  "oneOf": [
+    { "$ref": "#/$defs/success" },
+    { "$ref": "#/$defs/error" }
+  ],
+  "$defs": {
+    "success": {
+      "type": "object",
+      "required": ["jobId", "contractId", "status", "result", "trace"],
+      "properties": {
+        "jobId": { "type": "string" },
+        "contractId": { "type": "string" },
+        "status": { "const": "done" },
+        "result": {
+          "type": "object",
+          "required": ["document", "risk", "attentionPoints", "entities", "similarCases"],
+          "properties": {
+            "document": {
+              "type": "object",
+              "required": ["type", "legalArea", "language", "textQuality", "summary"],
+              "properties": {
+                "type": { "type": "string" },
+                "legalArea": { "type": "string" },
+                "language": { "type": "string" },
+                "pageCount": { "type": ["integer", "null"] },
+                "textQuality": { "type": "number", "minimum": 0, "maximum": 1 },
+                "summary": { "type": "string" }
+              }
+            },
+            "risk": {
+              "type": "object",
+              "required": ["score", "level", "rationale", "confidence"],
+              "properties": {
+                "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+                "level": { "enum": ["BAIXO", "MEDIO", "ALTO", "CRITICO"] },
+                "rationale": { "type": "string" },
+                "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+              }
+            },
+            "attentionPoints": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/attentionPoint" }
+            },
+            "entities": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/entity" }
+            },
+            "similarCases": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/similarCase" }
+            },
+            "fees": { "$ref": "#/$defs/fees" },
+            "outcomeProbability": { "$ref": "#/$defs/outcomeProbability" },
+            "finalOpinion": { "$ref": "#/$defs/finalOpinion" }
+          }
+        },
+        "trace": { "$ref": "#/$defs/trace" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["jobId", "contractId", "status", "error"],
+      "properties": {
+        "jobId": { "type": "string" },
+        "contractId": { "type": "string" },
+        "status": { "const": "error" },
+        "error": {
+          "type": "object",
+          "required": ["code", "message", "retryable"],
+          "properties": {
+            "code": {
+              "enum": [
+                "UNSUPPORTED_FILE",
+                "TEXT_EXTRACTION_FAILED",
+                "OCR_FAILED",
+                "MODEL_UNAVAILABLE",
+                "EXTERNAL_API_FAILED",
+                "OUTPUT_VALIDATION_FAILED",
+                "DOCUMENT_TOO_LARGE",
+                "TIMEOUT",
+                "JOB_ALREADY_ACTIVE",
+                "UNKNOWN"
+              ]
+            },
+            "message": { "type": "string" },
+            "retryable": { "type": "boolean" },
+            "detail": {}
+          }
+        },
+        "trace": { "$ref": "#/$defs/trace" }
+      }
+    },
+    "attentionPoint": {
+      "type": "object",
+      "required": ["severity", "clause", "description", "confidence", "source"],
+      "properties": {
+        "severity": { "enum": ["low", "medium", "high", "critical"] },
+        "clause": { "type": "string" },
+        "title": { "type": ["string", "null"] },
+        "description": { "type": "string" },
+        "recommendation": { "type": ["string", "null"] },
+        "page": { "type": ["integer", "null"] },
+        "evidence": { "type": ["string", "null"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "source": { "enum": ["hf", "rules", "llm", "hybrid"] }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": ["type", "value", "confidence", "source"],
+      "properties": {
+        "type": { "type": "string" },
+        "value": { "type": "string" },
+        "normalizedValue": { "type": ["string", "null"] },
+        "page": { "type": ["integer", "null"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "source": { "enum": ["hf", "rules", "llm", "hybrid"] }
+      }
+    },
+    "similarCase": {
+      "type": "object",
+      "required": ["tribunal", "number", "similarity", "outcome", "summary"],
+      "properties": {
+        "caseId": { "type": ["string", "null"] },
+        "tribunal": { "type": "string" },
+        "number": { "type": "string" },
+        "similarity": { "type": "number" },
+        "outcome": { "type": "string" },
+        "summary": { "type": "string" },
+        "relevanceReason": { "type": ["string", "null"] }
+      }
+    },
+    "fees": {
+      "type": ["object", "null"],
+      "properties": {
+        "min": { "type": ["number", "null"] },
+        "suggested": { "type": ["number", "null"] },
+        "max": { "type": ["number", "null"] },
+        "rationale": { "type": ["string", "null"] }
+      }
+    },
+    "outcomeProbability": {
+      "type": ["object", "null"],
+      "properties": {
+        "value": { "type": "number", "minimum": 0, "maximum": 1 },
+        "rationale": { "type": ["string", "null"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "finalOpinion": {
+      "type": ["object", "null"],
+      "properties": {
+        "title": { "type": "string" },
+        "executiveSummary": { "type": "string" },
+        "legalAnalysis": { "type": "string" },
+        "recommendations": { "type": "array", "items": { "type": "string" } },
+        "limitations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "trace": {
+      "type": ["object", "null"],
+      "required": ["pipelineVersion", "startedAt", "finishedAt", "durationMs", "mode", "externalApiUsed", "steps"],
+      "properties": {
+        "pipelineVersion": { "type": "string" },
+        "startedAt": { "type": "string" },
+        "finishedAt": { "type": "string" },
+        "durationMs": { "type": "integer" },
+        "mode": { "enum": ["fast", "standard", "deep"] },
+        "externalApiUsed": { "type": "boolean" },
+        "externalProvider": { "type": ["string", "null"], "enum": ["openai", "gemini", null] },
+        "externalModel": { "type": ["string", "null"] },
+        "estimatedCostUsd": { "type": ["number", "null"] },
+        "localModelCostEstimateUsd": { "type": ["number", "null"] },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["step", "provider"],
+            "properties": {
+              "step": { "type": "string" },
+              "provider": { "enum": ["huggingface", "openai", "gemini", "internal", "rules"] },
+              "model": { "type": ["string", "null"] },
+              "modelVersion": { "type": ["string", "null"] },
+              "durationMs": { "type": ["integer", "null"] },
+              "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+              "inputTokens": { "type": ["integer", "null"] },
+              "outputTokens": { "type": ["integer", "null"] },
+              "estimatedCostUsd": { "type": ["number", "null"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

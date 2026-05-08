@@ -1,0 +1,14 @@
+EXCELENTISSIMO(A) SENHOR(A) JUIZ(A) DE DIREITO
+
+{parties}
+
+DOS FATOS
+{facts}
+
+DO DIREITO
+{subject}
+
+DOS PEDIDOS
+{claims}
+
+Termos em que pede deferimento.

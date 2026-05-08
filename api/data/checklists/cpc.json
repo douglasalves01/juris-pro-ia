@@ -1,0 +1,30 @@
+{
+  "regulation": "CPC",
+  "area_keywords": ["peticao inicial", "contestacao", "recurso", "processo", "cpc", "art. 319"],
+  "items": [
+    {
+      "id": "cpc_partes",
+      "description": "Identifica partes e qualificacao basica.",
+      "required": ["autor", "reu", "requerente", "requerido", "qualificacao"],
+      "optional": ["cpf", "cnpj", "endereco"]
+    },
+    {
+      "id": "cpc_fatos_fundamentos",
+      "description": "Apresenta fatos e fundamentos juridicos.",
+      "required": ["dos fatos", "do direito", "fundamentos", "art. 319"],
+      "optional": ["codigo de processo civil", "cpc"]
+    },
+    {
+      "id": "cpc_pedidos",
+      "description": "Formula pedidos de forma expressa.",
+      "required": ["dos pedidos", "requer", "pedido", "condenacao"],
+      "optional": ["valor da causa", "provas"]
+    },
+    {
+      "id": "cpc_valor_causa",
+      "description": "Indica valor da causa quando aplicavel.",
+      "required": ["valor da causa", "da-se a causa", "atribui-se a causa"],
+      "optional": ["r$", "protesta por provas"]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "regulation": "CDC",
+  "area_keywords": ["consumidor", "fornecedor", "produto", "servico", "cdc", "clausula abusiva"],
+  "items": [
+    {
+      "id": "cdc_informacao_clara",
+      "description": "Apresenta informacoes claras sobre produto ou servico.",
+      "required": ["informacao clara", "descricao do produto", "descricao do servico", "condicoes do servico"],
+      "optional": ["consumidor", "fornecedor"]
+    },
+    {
+      "id": "cdc_responsabilidade",
+      "description": "Trata responsabilidade por vicio, defeito ou falha do servico.",
+      "required": ["responsabilidade", "vicio", "defeito", "falha na prestacao"],
+      "optional": ["consumidor", "indenizacao"]
+    },
+    {
+      "id": "cdc_clausula_abusiva",
+      "description": "Evita ou limita clausulas abusivas contra consumidor.",
+      "required": ["clausula abusiva", "equilibrio contratual", "boa-fe", "vantagem exagerada"],
+      "optional": ["multa", "rescisao", "consumidor"]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "regulation": "LGPD",
+  "area_keywords": ["dados", "lgpd", "privacidade", "titular", "controlador", "operador"],
+  "items": [
+    {
+      "id": "lgpd_base_legal",
+      "description": "Indica base legal para tratamento de dados pessoais.",
+      "required": ["base legal", "art. 7", "artigo 7", "consentimento", "execucao de contrato", "legitimo interesse"],
+      "optional": ["dados pessoais", "tratamento de dados", "lgpd"]
+    },
+    {
+      "id": "lgpd_finalidade",
+      "description": "Define finalidade especifica do tratamento de dados.",
+      "required": ["finalidade", "objetivo do tratamento", "para fins de"],
+      "optional": ["tratamento de dados", "dados pessoais"]
+    },
+    {
+      "id": "lgpd_segurança",
+      "description": "Prevê medidas de seguranca da informacao.",
+      "required": ["seguranca", "medidas tecnicas", "medidas administrativas", "confidencialidade"],
+      "optional": ["dados pessoais", "acesso restrito"]
+    },
+    {
+      "id": "lgpd_direitos_titular",
+      "description": "Reconhece direitos do titular dos dados.",
+      "required": ["direitos do titular", "acesso", "correcao", "eliminacao", "portabilidade"],
+      "optional": ["titular dos dados", "requisicao do titular"]
+    }
+  ]
+}
