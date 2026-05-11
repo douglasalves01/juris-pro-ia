@@ -136,34 +136,27 @@ def _verify_ambiguous_with_llm(
         for item in result.items
         if item.status == "warning"
     ]
+    prompt = (
+        "Voce verifica compliance juridico. "
+        "Para cada item, responda uma lista JSON com id, status "
+        '("ok", "fail", "warning" ou "na") e evidence curta.\n'
+        f"Regulacao: {result.regulation}\nItens: {json.dumps(prompt_items, ensure_ascii=False)}\n"
+        f"Texto: {text[:3000]}"
+    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "Voce verifica compliance juridico e responde apenas JSON.",
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Para cada item, responda uma lista JSON com id, status "
-                    '("ok", "fail", "warning" ou "na") e evidence curta.\n'
-                    f"Regulacao: {result.regulation}\nItens: {json.dumps(prompt_items, ensure_ascii=False)}\n"
-                    f"Texto: {text[:3000]}"
-                ),
-            },
-        ],
-        "temperature": 0.0,
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 800, "temperature": 0.0},
     }
     try:
-        response = httpx.post(
-            base_url.rstrip("/") + "/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=payload,
-            timeout=20.0,
-        )
+        response = httpx.post(url, json=payload, timeout=20.0)
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
+        content = response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        # Remove possível markdown code block
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
         parsed = json.loads(content)
     except Exception:
         return result
@@ -202,8 +195,8 @@ def check(
     contract_type: str = "",
     document_kind: str = "",
     api_key: str | None = None,
-    base_url: str = "https://api.openai.com/v1",
-    model: str = "gpt-4o-mini",
+    base_url: str = "",  # não usado no Gemini, mantido por compatibilidade
+    model: str = "gemini-2.0-flash",
 ) -> list[ComplianceResult]:
     selected = select_regulations(text, contract_type, document_kind)
     results: list[ComplianceResult] = []

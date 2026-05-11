@@ -18,26 +18,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = Field(
-        default="postgresql+asyncpg://jurispro:jurispro@127.0.0.1:5432/jurispro",
-        validation_alias="DATABASE_URL",
-    )
-    database_url_sync: str | None = Field(
-        default=None,
-        validation_alias="DATABASE_URL_SYNC",
-    )
-
-    jwt_secret: str = Field(
-        default="dev-secret-change-in-production",
-        validation_alias="JWT_SECRET",
-    )
-    redis_url: str = Field(
-        default="redis://127.0.0.1:6379/0",
-        validation_alias="REDIS_URL",
-    )
-    queue_backend: str = Field(
-        default="memory",
-        validation_alias="JURISPRO_QUEUE_BACKEND",
+    rabbitmq_url: str = Field(
+        default="amqp://guest:guest@rabbitmq:5672//",
+        validation_alias="RABBITMQ_URL",
     )
 
     upload_dir: Path = Field(
@@ -48,31 +31,18 @@ class Settings(BaseSettings):
         default_factory=lambda: _PROJECT_ROOT / "hf_models",
         validation_alias="MODELS_DIR",
     )
-
-    access_token_expire_minutes: int = Field(
-        default=15,
-        validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES",
-    )
-    refresh_token_expire_days: int = Field(
-        default=7,
-        validation_alias="REFRESH_TOKEN_EXPIRE_DAYS",
-    )
     max_upload_bytes: int = Field(
         default=50 * 1024 * 1024,
         validation_alias="MAX_UPLOAD_BYTES",
     )
 
-    openai_api_key: str | None = Field(
+    gemini_api_key: str | None = Field(
         default=None,
-        validation_alias="JURISPRO_OPENAI_API_KEY",
+        validation_alias="JURISPRO_GEMINI_API_KEY",
     )
-    openai_base_url: str = Field(
-        default="https://api.openai.com/v1",
-        validation_alias="JURISPRO_OPENAI_BASE_URL",
-    )
-    openai_model: str = Field(
-        default="gpt-4o-mini",
-        validation_alias="JURISPRO_OPENAI_MODEL",
+    gemini_model: str = Field(
+        default="gemini-2.0-flash",
+        validation_alias="JURISPRO_GEMINI_MODEL",
     )
     brand_name: str = Field(
         default="JurisPro IA",
@@ -87,19 +57,6 @@ class Settings(BaseSettings):
 @functools.lru_cache
 def get_settings() -> Settings:
     return Settings()
-
-
-def get_database_url_sync() -> str:
-    """URL síncrona (psycopg2) para Alembic, seed e busca pgvector."""
-    s = get_settings()
-    if s.database_url_sync:
-        return s.database_url_sync
-    url = s.database_url
-    if "+asyncpg" in url:
-        return url.replace("+asyncpg", "+psycopg2", 1)
-    if url.startswith("postgresql://") and "+psycopg" not in url:
-        return "postgresql+psycopg2://" + url.removeprefix("postgresql://")
-    return url
 
 
 settings: Settings = get_settings()

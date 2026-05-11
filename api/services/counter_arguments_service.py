@@ -104,29 +104,30 @@ def build_with_llm(
     base_url: str,
     model: str,
 ) -> list[CounterArgument]:
+    prompt = (
+        f"Você é um advogado adversário experiente. "
+        f"Liste até {max_arguments} argumentos que a parte contrária poderia usar. "
+        'Responda apenas com uma lista JSON com campos "text", "strength" ("forte", "medio" ou "fraco") '
+        f'e "category".\n\nTexto: {text[:3000]}'
+    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": "Você é um advogado adversário experiente. Responda apenas em JSON.",
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Liste até {max_arguments} argumentos que a parte contrária poderia usar. "
-                    'Use uma lista JSON com campos "text", "strength" ("forte", "medio" ou "fraco") '
-                    f'e "category".\n\nTexto: {text[:3000]}'
-                ),
-            },
-        ],
-        "temperature": 0.2,
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 800, "temperature": 0.2},
     }
-    url = base_url.rstrip("/") + "/chat/completions"
     with httpx.Client(timeout=25.0) as client:
-        response = client.post(url, headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+        response = client.post(url, json=payload)
         response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"]
+    data = response.json()
+    try:
+        content = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError, TypeError):
+        content = "[]"
+    # Remove possível markdown code block
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
     parsed = json.loads(content)
     return _coerce_arguments(parsed, max_arguments)
 

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import io
-import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,7 +54,12 @@ def client():
         yield tc
 
 
-def test_async_returns_202_and_poll_finds_done(client: TestClient) -> None:
+def test_async_returns_202_and_publishes_to_rabbitmq(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enqueue = AsyncMock()
+    monkeypatch.setattr("api.main.enqueue_analysis", enqueue)
     files = {
         "file": (
             "doc.txt",
@@ -72,65 +76,17 @@ def test_async_returns_202_and_poll_finds_done(client: TestClient) -> None:
     body = response.json()
     assert body["status"] == "queued"
     assert body["jobId"] == "job-e2e-1"
+    assert body["queueBackend"] == "rabbitmq"
     assert "/jobs/job-e2e-1" in body.get("pollUrl", "")
 
-    for _ in range(80):
-        poll = client.get("/jobs/job-e2e-1")
-        assert poll.status_code == 200
-        payload = poll.json()
-        if payload.get("status") == "done":
-            assert payload.get("result") is not None
-            assert payload["result"]["document"]["legalArea"] == "Consumidor"
-            return
-        time.sleep(0.03)
-    raise AssertionError("timeout aguardando conclusão do job")
+    enqueue.assert_called_once()
 
-
-def test_async_celery_backend_enfileira_e_poll_retorna_done(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from workers.celery_app import celery_app
-
-    old_always_eager = celery_app.conf.task_always_eager
-    old_store_eager = celery_app.conf.task_store_eager_result
-    celery_app.conf.task_always_eager = True
-    celery_app.conf.task_store_eager_result = False
-    monkeypatch.setenv("JURISPRO_QUEUE_BACKEND", "celery")
-    try:
-        files = {
-            "file": (
-                "doc.txt",
-                io.BytesIO(b"Peticao com conteudo juridico para fila celery."),
-                "text/plain",
-            )
-        }
-        response = client.post(
-            "/analyze/file/async",
-            files=files,
-            data={"jobId": "job-celery-eager", "regiao": "SP"},
-        )
-        assert response.status_code == 202
-        body = response.json()
-        assert body["queueBackend"] == "celery"
-
-        poll = client.get("/jobs/job-celery-eager")
-        assert poll.status_code == 200
-        payload = poll.json()
-        assert payload["status"] == "done"
-        assert payload["result"]["document"]["legalArea"] == "Consumidor"
-    finally:
-        celery_app.conf.task_always_eager = old_always_eager
-        celery_app.conf.task_store_eager_result = old_store_eager
+    poll = client.get("/jobs/job-e2e-1")
+    assert poll.status_code == 200
+    assert poll.json()["status"] == "queued"
 
 
 def test_async_conflict_when_job_id_still_active(client: TestClient) -> None:
-    def _slow_analyze(*_a: object, **_kw: object) -> AnalysisResult:
-        time.sleep(0.35)
-        return _minimal_result()
-
-    client.app.state.pipeline.analyze.side_effect = _slow_analyze
-
     files = {
         "file": (
             "slow.txt",

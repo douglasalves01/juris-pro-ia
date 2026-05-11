@@ -36,11 +36,62 @@ def _move_model_to_device(model: torch.nn.Module, device: torch.device) -> torch
     return model
 
 
+def _load_label_map(path: Path) -> dict[int, str]:
+    label_map = path / "label_map.json"
+    if label_map.is_file():
+        with label_map.open(encoding="utf-8") as fh:
+            lm = json.load(fh)
+        return {int(k): str(v) for k, v in lm["id2label"].items()}
+    return {}
+
+
+def _is_sequence_classifier_checkpoint(path: Path, expected_labels: int) -> bool:
+    """Evita carregar checkpoints NER/token-classification como classificador de área."""
+    config_path = path / "config.json"
+    if not config_path.is_file():
+        return False
+    try:
+        with config_path.open(encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except Exception:
+        return False
+
+    architectures = {str(v) for v in cfg.get("architectures") or []}
+    if "BertForSequenceClassification" not in architectures:
+        return False
+
+    cfg_labels = cfg.get("id2label") or {}
+    if len(cfg_labels) != expected_labels:
+        return False
+
+    weights = path / "model.safetensors"
+    if weights.is_file():
+        try:
+            from safetensors.torch import safe_open
+
+            with safe_open(str(weights), framework="pt") as fh:
+                shape = tuple(fh.get_tensor("classifier.bias").shape)
+            return bool(shape and int(shape[0]) == expected_labels)
+        except Exception:
+            return False
+
+    return True
+
+
 def _ensure_loaded(models_dir: str) -> tuple[torch.device, Any, Any, dict[int, str]]:
     path = _resolve_submodel_path(models_dir, "classificacao_tipo")
     key = str(path)
     if key in _CACHE:
         return _CACHE[key]
+
+    id2label = _load_label_map(path)
+    if not id2label:
+        raise RuntimeError("label_map.json ausente para classificacao_tipo")
+    if not _is_sequence_classifier_checkpoint(path, len(id2label)):
+        raise RuntimeError(
+            "classificacao_tipo inválido: checkpoint não é BertForSequenceClassification "
+            "compatível com label_map.json"
+        )
 
     device = _get_torch_device()
     tokenizer = AutoTokenizer.from_pretrained(str(path), use_fast=True)
@@ -48,16 +99,40 @@ def _ensure_loaded(models_dir: str) -> tuple[torch.device, Any, Any, dict[int, s
     model = _move_model_to_device(model, device)
     model.eval()
 
-    label_map = path / "label_map.json"
-    if label_map.is_file():
-        with label_map.open(encoding="utf-8") as fh:
-            lm = json.load(fh)
-        id2label = {int(k): v for k, v in lm["id2label"].items()}
-    else:
-        id2label = {int(k): v for k, v in model.config.id2label.items()}
-
     _CACHE[key] = (device, model, tokenizer, id2label)
     return _CACHE[key]
+
+
+def _fallback_keyword_classification(
+    text: str,
+    reason: str,
+    labels: dict[int, str] | None = None,
+) -> dict[str, Any]:
+    label = _keyword_suggested_type(text) or "Outros"
+    known = list((labels or {}).values()) or [
+        "Consumidor",
+        "Criminal",
+        "Família",
+        "Fornecimento",
+        "Obras",
+        "Outros",
+        "Parceria",
+        "Previdenciário",
+        "Serviços",
+        "Tecnologia",
+        "Trabalhista",
+        "Tributário",
+    ]
+    confidence = 0.75 if label != "Outros" else 0.55
+    base = 0.0 if len(known) <= 1 else (1.0 - confidence) / (len(known) - 1)
+    probs = {item: base for item in known}
+    probs[label] = confidence
+    return {
+        "contract_type": label,
+        "probs": probs,
+        "classification_source": "keyword_fallback",
+        "warning": reason,
+    }
 
 
 def predict(text: str, models_dir: str) -> dict[str, Any]:
@@ -65,6 +140,15 @@ def predict(text: str, models_dir: str) -> dict[str, Any]:
     path = _resolve_submodel_path(models_dir, "classificacao_tipo")
     if not path.is_dir():
         return {"contract_type": "Outros", "probs": {}, "error": "classificacao_tipo não encontrado"}
+
+    labels = _load_label_map(path)
+    if not labels or not _is_sequence_classifier_checkpoint(path, len(labels)):
+        return _fallback_keyword_classification(
+            text,
+            "classificacao_tipo local é incompatível com classificador de sequência; "
+            "usando regras por palavras-chave.",
+            labels,
+        )
 
     device, model, tokenizer, id2label = _ensure_loaded(models_dir)
     max_length = min(getattr(model.config, "max_position_embeddings", 512), 512)
@@ -256,6 +340,15 @@ def predict_multi_chunk(
     path = _resolve_submodel_path(models_dir, "classificacao_tipo")
     if not path.is_dir():
         return {"contract_type": "Outros", "probs": {}, "error": "classificacao_tipo não encontrado"}
+
+    labels = _load_label_map(path)
+    if not labels or not _is_sequence_classifier_checkpoint(path, len(labels)):
+        return _fallback_keyword_classification(
+            sample,
+            "classificacao_tipo local é incompatível com classificador de sequência; "
+            "usando regras por palavras-chave.",
+            labels,
+        )
 
     n_take = min(5, len(chunks))
     if len(chunks) <= n_take:

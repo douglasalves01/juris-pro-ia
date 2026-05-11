@@ -62,7 +62,7 @@ from api.services.plain_summary_service import generate_pdf_base64, generate_sum
 from api.services.private_knowledge import ingest_documents as ingest_firm_knowledge
 from api.services.private_knowledge import stats as firm_knowledge_stats
 from api.services.semantic_cache import stats as semantic_cache_stats
-from api.services.auth_service import verify_access_token
+from api.services.queue_service import enqueue_analysis, enqueue_knowledge
 from api.ml.text_extractor import TextExtractor
 
 _MODELS_DIR = os.getenv("MODELS_DIR", str(Path(__file__).resolve().parent.parent / "hf_models"))
@@ -155,26 +155,18 @@ def _sse_event(event: str, data: dict[str, Any]) -> str:
 
 def _authorize_firm_request(firm_id: str, authorization: str | None) -> None:
     try:
-        requested = uuid.UUID(str(firm_id))
+        uuid.UUID(str(firm_id))
     except ValueError:
         raise HTTPException(status_code=422, detail="firmId inválido.")
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Token Bearer obrigatório.")
-    token = authorization.split(" ", 1)[1].strip()
-    try:
-        claims = verify_access_token(token)
-        token_firm = uuid.UUID(str(claims.get("firm_id")))
-    except Exception:
-        raise HTTPException(status_code=401, detail="Token inválido ou expirado.")
-    if token_firm != requested:
-        raise HTTPException(status_code=403, detail="firmId não autorizado.")
 
 
 def _authorized_firm_uuid(firm_id: str | None, authorization: str | None) -> uuid.UUID | None:
     if not firm_id:
         return None
-    _authorize_firm_request(firm_id, authorization)
-    return uuid.UUID(str(firm_id))
+    try:
+        return uuid.UUID(str(firm_id))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="firmId inválido.")
 
 
 def _normalize_response_for_cache(payload: dict[str, Any]) -> dict[str, Any]:
@@ -247,10 +239,6 @@ def _cleanup_expired_cache(now: float) -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _queue_backend() -> str:
-    return os.getenv("JURISPRO_QUEUE_BACKEND", get_settings().queue_backend).strip().lower()
 
 
 def record_pipeline_metrics(steps: list[dict[str, Any]]) -> None:
@@ -794,216 +782,6 @@ def _job_queued_payload(
     }
 
 
-def _celery_job_response(job_id: str, rec: dict[str, Any]) -> dict[str, Any]:
-    from celery.result import AsyncResult
-
-    from workers.celery_app import celery_app
-
-    task_id = str(rec.get("celery_task_id") or "")
-    if not task_id:
-        return rec["response"]
-
-    result = AsyncResult(task_id, app=celery_app)
-    state = result.state
-    if state == "SUCCESS":
-        payload = result.result
-        if isinstance(payload, dict):
-            rec["phase"] = payload.get("status", "done")
-            rec["response"] = payload
-            rec["updated_at"] = _utc_now()
-            return payload
-    if state == "FAILURE":
-        updated_at = _utc_now()
-        payload = {
-            "jobId": job_id,
-            "contractId": rec.get("contract_id", ""),
-            "status": "error",
-            "createdAt": rec.get("created_at", updated_at),
-            "updatedAt": updated_at,
-            "error": {"message": str(result.result or "Falha no worker Celery.")[:500]},
-        }
-        rec["phase"] = "error"
-        rec["response"] = payload
-        rec["updated_at"] = updated_at
-        return payload
-
-    meta = result.info if isinstance(result.info, dict) else {}
-    phase = "processing" if state in {"STARTED", "PROGRESS", "RETRY"} else "queued"
-    updated_at = _utc_now()
-    payload = {
-        "jobId": job_id,
-        "contractId": rec.get("contract_id", ""),
-        "status": phase,
-        "createdAt": rec.get("created_at", updated_at),
-        "updatedAt": updated_at,
-    }
-    if meta:
-        payload["progress"] = int(meta.get("progress", 0) or 0)
-        if meta.get("detail"):
-            payload["detail"] = str(meta["detail"])
-    rec["phase"] = phase
-    rec["response"] = payload
-    rec["updated_at"] = updated_at
-    return payload
-
-
-def _run_analysis_job_in_thread(
-    job_id: str,
-    tmp_path: str,
-    regiao: str,
-    mode: str,
-    contract_id: str,
-    wall_started: str,
-    firm_id: str | None = None,
-) -> None:
-    store = _jobs_store()
-    lock = _jobs_lock()
-    mode = mode if mode in {"fast", "standard", "deep"} else "standard"
-    created_at = wall_started
-
-    def _touch_response_processing() -> None:
-        with lock:
-            if job_id not in store:
-                return
-            store[job_id]["phase"] = "processing"
-            store[job_id]["updated_at"] = _utc_now()
-            store[job_id]["response"] = {
-                "jobId": job_id,
-                "contractId": contract_id,
-                "status": "processing",
-                "createdAt": created_at,
-                "updatedAt": store[job_id]["updated_at"],
-            }
-
-    _touch_response_processing()
-
-    text: str | None = None
-    try:
-        text = app.state.extractor.extract(tmp_path)
-    except Exception as exc:
-        logger.warning("Job %s: falha na extração: %s", job_id, exc)
-        t0 = time.perf_counter()
-        code, retryable, message = _http_error_contract(422, str(exc))
-        payload = _error_payload(
-            job_id=job_id,
-            contract_id=contract_id,
-            code=code,
-            message=message,
-            retryable=retryable,
-            detail=_maybe_debug_detail(exc),
-            started_at=wall_started,
-            finished_at=_utc_now(),
-            duration_ms=int((time.perf_counter() - t0) * 1000),
-            mode=mode,
-            trace_step="extract_text",
-        )
-        with lock:
-            if job_id in store:
-                store[job_id]["phase"] = "error"
-                store[job_id]["response"] = payload
-                store[job_id]["updated_at"] = _utc_now()
-        return
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
-
-    if not text or not text.strip():
-        t0 = time.perf_counter()
-        code, retryable, message = _http_error_contract(
-            422, "Nenhum texto extraído do arquivo."
-        )
-        payload = _error_payload(
-            job_id=job_id,
-            contract_id=contract_id,
-            code=code,
-            message=message,
-            retryable=retryable,
-            detail=None,
-            started_at=wall_started,
-            finished_at=_utc_now(),
-            duration_ms=int((time.perf_counter() - t0) * 1000),
-            mode=mode,
-            trace_step="extract_text",
-        )
-        with lock:
-            if job_id in store:
-                store[job_id]["phase"] = "error"
-                store[job_id]["response"] = payload
-                store[job_id]["updated_at"] = _utc_now()
-        return
-
-    started_pipeline = _utc_now()
-    t_pipeline = time.perf_counter()
-    try:
-        result: AnalysisResult = app.state.pipeline.analyze(
-            text,
-            regiao=regiao,
-            mode=mode,
-            firm_id=uuid.UUID(firm_id) if firm_id else None,
-        )
-    except Exception as exc:
-        logger.exception("Job %s: falha no pipeline", job_id)
-        code, retryable, message = _classify_pipeline_failure(exc)
-        payload = _error_payload(
-            job_id=job_id,
-            contract_id=contract_id,
-            code=code,
-            message=message,
-            retryable=retryable,
-            detail=_maybe_debug_detail(exc),
-            started_at=started_pipeline,
-            finished_at=_utc_now(),
-            duration_ms=int((time.perf_counter() - t_pipeline) * 1000),
-            mode=mode,
-            trace_step="pipeline",
-        )
-        with lock:
-            if job_id in store:
-                store[job_id]["phase"] = "error"
-                store[job_id]["response"] = payload
-                store[job_id]["updated_at"] = _utc_now()
-        return
-
-    finished_at = _utc_now()
-    duration_ms = int((time.perf_counter() - t_pipeline) * 1000)
-    payload = _build_analysis_response(
-        result=result,
-        job_id=job_id,
-        contract_id=contract_id,
-        started_at=started_pipeline,
-        finished_at=finished_at,
-        duration_ms=duration_ms,
-        mode=mode,
-    )
-    with lock:
-        if job_id in store:
-            store[job_id]["phase"] = "done"
-            store[job_id]["response"] = payload
-            store[job_id]["updated_at"] = _utc_now()
-
-
-async def _enqueue_analysis_job(
-    job_id: str,
-    tmp_path: str,
-    regiao: str,
-    mode: str,
-    contract_id: str,
-    wall_started: str,
-    firm_id: str | None = None,
-) -> None:
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None,
-        _run_analysis_job_in_thread,
-        job_id,
-        tmp_path,
-        regiao,
-        mode,
-        contract_id,
-        wall_started,
-        firm_id,
-    )
-
-
 def _build_analysis_response(
     *,
     result: AnalysisResult,
@@ -1482,7 +1260,7 @@ async def analyze_file_async(
     mode: str = Form(default="standard"),
     authorization: str | None = Header(default=None),
 ):
-    """Aceita o arquivo, retorna 202 e processa em background (fila em memória)."""
+    """Aceita o arquivo, retorna 202 e publica o job no RabbitMQ."""
     del userId
     job_id = jobId or str(uuid4())
     contract_id = contractId or ""
@@ -1572,28 +1350,14 @@ async def analyze_file_async(
             "response": _job_queued_payload(job_id, contract_id, now, now),
         }
 
-    if _queue_backend() in {"celery", "redis"}:
-        from api.worker import process_analysis_job
-
-        async_result = process_analysis_job.delay(
-            job_id, tmp_path, regiao, mode, contract_id, now, str(firm_uuid) if firm_uuid else None
+    # Publica na fila RabbitMQ — o worker consome, processa e publica o resultado
+    task = asyncio.create_task(
+        enqueue_analysis(
+            job_id, None, tmp_path, regiao, mode, contract_id,
+            str(firm_uuid) if firm_uuid else None,
         )
-        with lock:
-            if job_id in store:
-                store[job_id]["celery_task_id"] = async_result.id
-                if async_result.ready() and isinstance(async_result.result, dict):
-                    store[job_id]["phase"] = async_result.result.get("status", "done")
-                    store[job_id]["response"] = async_result.result
-                store[job_id]["updated_at"] = _utc_now()
-        backend = "celery"
-    else:
-        task = asyncio.create_task(
-            _enqueue_analysis_job(
-                job_id, tmp_path, regiao, mode, contract_id, now, str(firm_uuid) if firm_uuid else None
-            )
-        )
-        task.add_done_callback(_log_async_task_result)
-        backend = "memory"
+    )
+    task.add_done_callback(_log_async_task_result)
 
     return JSONResponse(
         status_code=202,
@@ -1601,7 +1365,7 @@ async def analyze_file_async(
             "jobId": job_id,
             "contractId": contract_id,
             "status": "queued",
-            "queueBackend": backend,
+            "queueBackend": "rabbitmq",
             "pollUrl": f"/jobs/{job_id}",
             "createdAt": now,
             "updatedAt": now,
@@ -1615,8 +1379,6 @@ async def get_job_status(job_id: str):
     lock = _jobs_lock()
     with lock:
         rec = _jobs_store().get(job_id)
-        if rec and rec.get("celery_task_id") and rec.get("phase") not in {"done", "error"}:
-            return _celery_job_response(job_id, rec)
     if not rec:
         raise HTTPException(status_code=404, detail="Job não encontrado.")
     return rec["response"]
@@ -1648,9 +1410,9 @@ async def analyze_plain_summary(body: PlainSummaryRequest):
     summary_text = generate_summary(
         source_text,
         body.level,
-        settings.openai_api_key,
-        str(settings.openai_base_url),
-        str(settings.openai_model),
+        settings.gemini_api_key,
+        "",
+        str(settings.gemini_model),
     )
     pdf_base64 = None
     if body.include_pdf:
@@ -1687,9 +1449,9 @@ async def analyze_counter_arguments(body: CounterArgumentsRequest):
         source_text,
         attention_points,
         body.maxArguments,
-        settings.openai_api_key,
-        str(settings.openai_base_url),
-        str(settings.openai_model),
+        settings.gemini_api_key,
+        "",
+        str(settings.gemini_model),
     )
     return {
         "jobId": resolved_job_id,
@@ -1804,9 +1566,9 @@ async def generate_draft_endpoint(body: DraftRequest):
         body.documentType,
         body.context.model_dump(),
         body.style,
-        settings.openai_api_key,
-        str(settings.openai_base_url),
-        str(settings.openai_model),
+        settings.gemini_api_key,
+        "",
+        str(settings.gemini_model),
         body.firmId,
     )
     return result
@@ -1825,13 +1587,7 @@ async def ingest_firm_knowledge_endpoint(
     _authorize_firm_request(firm_id, authorization)
     job_id = str(uuid4())
     documents = [item.model_dump() for item in body.documents]
-    settings = get_settings()
-    if settings.queue_backend.strip().lower() == "celery":
-        from api.worker import index_firm_knowledge
-
-        index_firm_knowledge.delay(firm_id, documents)
-    else:
-        background_tasks.add_task(ingest_firm_knowledge, firm_id, documents)
+    background_tasks.add_task(enqueue_knowledge, firm_id, documents)
     return {
         "jobId": job_id,
         "firmId": str(uuid.UUID(str(firm_id))),

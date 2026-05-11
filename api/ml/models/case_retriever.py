@@ -13,7 +13,6 @@ from qdrant_client.models import Filter, FieldCondition, MatchValue
 from sentence_transformers import SentenceTransformer
 
 from api.ml.models._common import get_torch_device, resolve_submodel_path
-from api.services import private_knowledge
 
 logger = logging.getLogger(__name__)
 
@@ -101,23 +100,20 @@ def predict(
         tipo    — ex. "Consumidor", "Trabalhista"
         outcome — ex. "procedente", "improcedente"
     """
-    private_cases = private_knowledge.search_private(_kwargs.get("firm_id"), text, top_k=top_k)
     model = _ensure_model(models_dir)
     if model is None:
         return {
-            "similar_cases": private_cases,
-            "similar_cases_notice": (
-                None if private_cases else "Modelo de embeddings não carregado."
-            ),
+            "similar_cases": [],
+            "similar_cases_notice": "Modelo de embeddings não carregado; consulta ao Qdrant não executada.",
         }
 
     if not _collection_exists():
         return {
-            "similar_cases": private_cases,
+            "similar_cases": [],
             "similar_cases_notice": (
-                None
-                if private_cases
-                else "Base de casos ainda não populada. Execute: python scripts/ingest_casos.py"
+                "Coleção Qdrant 'casos_juridicos' indisponível ou vazia. "
+                "Importe decisões reais com scripts/fetch_datajud.py, scripts/ingest_casos.py "
+                "ou scripts/import_qdrant.py."
             ),
         }
 
@@ -191,9 +187,4 @@ def predict(
         for rerank_score, vector_score, lexical, hit, payload in ranked[:top_k]
     ]
 
-    seen = {item.get("id") for item in private_cases}
-    results = private_cases + [
-        item for item in public_results if item.get("id") not in seen
-    ]
-    results = results[:top_k]
-    return {"similar_cases": results, "similar_cases_notice": None}
+    return {"similar_cases": public_results[:top_k], "similar_cases_notice": None}

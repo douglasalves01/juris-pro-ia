@@ -107,32 +107,27 @@ def rewrite_with_llm(
         "intermediario": "objetiva, com poucos termos técnicos e explicações curtas",
         "tecnico": "técnica, mantendo a terminologia jurídica",
     }.get(level, "simples")
+    prompt = (
+        f"Você explica documentos jurídicos em linguagem {level_description}.\n"
+        "Reescreva o resumo abaixo mantendo os fatos e limitando a 200 palavras.\n\n"
+        f"Texto: {text}"
+    )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": f"Você explica documentos jurídicos em linguagem {level_description}.",
-            },
-            {
-                "role": "user",
-                "content": (
-                    "Reescreva o resumo abaixo mantendo os fatos e limitando a 200 palavras.\n\n"
-                    f"Texto: {text}"
-                ),
-            },
-        ],
-        "temperature": 0.2,
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 400, "temperature": 0.2},
     }
-    url = base_url.rstrip("/") + "/chat/completions"
     with httpx.Client(timeout=25.0) as client:
-        response = client.post(url, headers={"Authorization": f"Bearer {api_key}"}, json=payload)
+        response = client.post(url, json=payload)
         response.raise_for_status()
     data = response.json()
-    content = data["choices"][0]["message"]["content"]
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("LLM retornou resumo vazio.")
-    return content.strip()
+    try:
+        content = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError, TypeError):
+        content = ""
+    if not content:
+        raise ValueError("Gemini retornou resumo vazio.")
+    return content
 
 
 def generate_summary(

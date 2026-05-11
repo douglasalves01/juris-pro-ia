@@ -100,38 +100,33 @@ def build_with_llm(
     base_url: str,
     model: str,
 ) -> dict[str, Any]:
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Voce redige minutas juridicas em portugues brasileiro. "
-                    "Responda apenas JSON com draft, sections e disclaimer."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Tipo: {document_type}\nEstilo: {style}\n"
-                    f"Contexto: {json.dumps(context, ensure_ascii=False)}\n"
-                    "Marque trechos de baixa confianca com [REVISAR]."
-                ),
-            },
-        ],
-        "temperature": 0.2,
-    }
-    response = httpx.post(
-        base_url.rstrip("/") + "/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json=payload,
-        timeout=35.0,
+    prompt = (
+        "Voce redige minutas juridicas em portugues brasileiro. "
+        "Responda apenas JSON com draft, sections e disclaimer.\n\n"
+        f"Tipo: {document_type}\nEstilo: {style}\n"
+        f"Contexto: {json.dumps(context, ensure_ascii=False)}\n"
+        "Marque trechos de baixa confianca com [REVISAR]."
     )
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 2000, "temperature": 0.2},
+    }
+    response = httpx.post(url, json=payload, timeout=35.0)
     response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"]
+    data = response.json()
+    try:
+        content = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError, TypeError):
+        content = ""
+    # Remove possível markdown code block
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
     parsed = json.loads(content)
     if not isinstance(parsed, dict) or not parsed.get("draft"):
-        raise ValueError("LLM retornou minuta invalida.")
+        raise ValueError("Gemini retornou minuta invalida.")
     parsed.setdefault("sections", [])
     parsed["disclaimer"] = parsed.get("disclaimer") or _DISCLAIMER
     return parsed

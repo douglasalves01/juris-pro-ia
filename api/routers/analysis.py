@@ -1,4 +1,4 @@
-"""Análise assíncrona (Celery) e consulta de resultados."""
+"""Análise assíncrona e consulta de resultados."""
 
 from __future__ import annotations
 

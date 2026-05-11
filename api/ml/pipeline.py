@@ -571,9 +571,9 @@ class AnalysisPipeline:
                 cleaned,
                 contract_type=contract_type,
                 document_kind=document_kind,
-                api_key=settings.openai_api_key,
-                base_url=str(settings.openai_base_url),
-                model=str(settings.openai_model),
+                api_key=settings.gemini_api_key,
+                base_url="",
+                model=str(settings.gemini_model),
             )
             compliance = [
                 ComplianceBlock(
@@ -728,7 +728,7 @@ class AnalysisPipeline:
         should_try_llm = external_llm.should_invoke_external_llm(
             mode,
             gate_on,
-            settings.openai_api_key,
+            settings.gemini_api_key,
         )
         cached_enrichment = (
             semantic_cache.get(mode, contract_type, rep) if should_try_llm else None
@@ -746,9 +746,9 @@ class AnalysisPipeline:
             enrich, _ = external_llm.maybe_enrich_opinion(
                 mode=mode,
                 gate_triggered=gate_on,
-                api_key=settings.openai_api_key,
-                base_url=str(settings.openai_base_url),
-                model=str(settings.openai_model),
+                api_key=settings.gemini_api_key,
+                base_url="",
+                model=str(settings.gemini_model),
                 executive_summary=executive_summary,
                 main_risks=main_risks,
                 recommendations=recommendations,

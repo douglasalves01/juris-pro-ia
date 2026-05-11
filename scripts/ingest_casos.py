@@ -3,7 +3,6 @@ Ingere jurisprudência pública no Qdrant.
 
 Fontes (todas públicas, sem dados sensíveis):
   1. HuggingFace: joelniklaus/brazilian_court_decisions (~8k ementas)
-  2. Arquivo JSON local: scripts/casos_extras.json (opcional)
 
 Uso:
     python scripts/ingest_casos.py
@@ -14,7 +13,6 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import uuid
 from pathlib import Path
@@ -36,7 +34,6 @@ COLLECTION     = "casos_juridicos"
 EMBEDDING_DIM  = 768
 BATCH_SIZE     = 64
 MODEL_PATH     = str(Path(__file__).resolve().parent.parent / "hf_models" / "embeddings")
-EXTRAS_PATH    = Path(__file__).resolve().parent / "casos_extras.json"
 
 # Mapeamento outcome dataset → label legível
 OUTCOME_MAP = {
@@ -199,16 +196,6 @@ def main() -> None:
     ds = load_dataset_robust("joelniklaus/brazilian_court_decisions")
     records = build_records(ds)
     print(f"  Registros válidos: {len(records)}")
-
-    # 2. Casos extras locais (opcional)
-    if EXTRAS_PATH.is_file():
-        with EXTRAS_PATH.open(encoding="utf-8") as f:
-            extras = json.load(f)
-        for e in extras:
-            if not e.get("id"):
-                e["id"] = str(uuid.uuid4())
-        records.extend(extras)
-        print(f"  Casos extras carregados: {len(extras)}")
 
     if not records:
         print("Nenhum registro para ingerir. Abortando.")

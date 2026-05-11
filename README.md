@@ -63,7 +63,7 @@ Para **contratos, PDFs, petições e demais textos jurídicos** (PDF / DOCX / TX
 | `GET` | `/jobs/{jobId}` | Polling: `queued` → `processing` → `done` ou `error`. |
 | `POST` | `/analyze/compare` | Compara duas versões de contrato (schema próprio). |
 
-A fila assíncrona atual é **em memória no processo** — adequada a um worker único ou desenvolvimento. Para várias réplicas, coloque **Redis/Rabbit/SQS** na frente no NestJS ou em um worker dedicado.
+A fila assíncrona usa **RabbitMQ**: a API publica jobs e o worker dedicado consome, processa e publica resultados.
 
 ---
 
@@ -121,7 +121,7 @@ Testes: `./.venv/bin/python -m pytest api/ml/tests tests`
 | `JURISPRO_SKIP_PRELOAD` | — | Não pré-carregar todos os modelos (CI/dev). |
 | `JURISPRO_DEBUG_ERRORS` | — | Incluir `detail` interno em erros (**não** em produção). |
 | `JURISPRO_OPENAI_*` | — | LLM compatível com OpenAI para enriquecimento opcional. |
-| `JURISPRO_MAX_ASYNC_JOBS` | `500` | Tamanho máximo da fila em memória. |
+| `JURISPRO_MAX_ASYNC_JOBS` | `500` | Máximo de metadados de jobs mantidos para polling local. |
 
 ---
 

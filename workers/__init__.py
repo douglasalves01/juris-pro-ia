@@ -1,1 +1,1 @@
-"""Workers Celery."""
+"""Workers RabbitMQ."""

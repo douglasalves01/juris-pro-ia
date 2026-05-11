@@ -317,7 +317,7 @@ Documentos longos hoje provavelmente são truncados ou processados inteiros. Imp
 
 ## Melhorias de escalabilidade
 
-- **Fila em memória → Redis/BullMQ:** a limitação atual é explícita no README. Para multi-tenant SaaS, é o primeiro bloqueador de escala.
+- **Fila em memória → RabbitMQ:** a limitação atual é explícita no README. Para multi-tenant SaaS, é o primeiro bloqueador de escala.
 - **Isolamento de recursos por tenant:** modelos pesados (T5, embeddings) compartilhados são aceitáveis; mas jobs de tenants grandes não devem bloquear tenants pequenos. Implementar filas separadas por tier (free/pro/enterprise).
 - **Lazy loading de modelos:** `JURISPRO_SKIP_PRELOAD` já existe para dev; em produção, carregar modelos sob demanda com TTL reduz uso de memória em instâncias com poucos requests.
 - **Qdrant collections por tenant:** para o RAG privado (4.1), isolamento é obrigatório. Definir a estratégia agora evita migração dolorosa depois.
@@ -345,7 +345,7 @@ Documentos longos hoje provavelmente são truncados ou processados inteiros. Imp
 2. Simulação de argumentos contrários
 3. Classificação de urgência processual
 4. Checklist LGPD/CDC automático
-5. Migração fila em memória → Redis/BullMQ
+5. Migração fila em memória → RabbitMQ
 6. Latência por step no `trace`
 
 ### Fase 2 — Diferenciais competitivos (6-16 semanas)

@@ -1,10 +1,9 @@
 services:
-  redis:
-    image: redis:7-alpine
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
     ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
+      - "5672:5672"
+      - "15672:15672"
     restart: unless-stopped
 
   qdrant:
@@ -27,10 +26,9 @@ services:
       CORS_ORIGINS: "*"
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
-      REDIS_URL: redis://redis:6379/0
-      JURISPRO_QUEUE_BACKEND: celery
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
     depends_on:
-      - redis
+      - rabbitmq
       - qdrant
     restart: unless-stopped
     healthcheck:
@@ -42,7 +40,7 @@ services:
 
   worker:
     build: .
-    command: celery -A api.worker.celery_app worker --loglevel=info
+    command: python -m workers.rabbitmq_worker
     volumes:
       - ./hf_models:/app/hf_models:ro
     environment:
@@ -50,13 +48,11 @@ services:
       MAX_UPLOAD_BYTES: "52428800"
       QDRANT_HOST: qdrant
       QDRANT_PORT: "6333"
-      REDIS_URL: redis://redis:6379/0
-      JURISPRO_QUEUE_BACKEND: celery
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
     depends_on:
-      - redis
+      - rabbitmq
       - qdrant
     restart: unless-stopped
 
 volumes:
   qdrant_data:
-  redis_data:

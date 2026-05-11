@@ -2,13 +2,11 @@
 """
 Teste end-to-end do JurisPro IA (HTTP real, sem mocks).
 
-Pré-requisitos: Postgres, Redis, API, worker; migrations e seed opcional para similar_cases.
+Pré-requisitos: Postgres, RabbitMQ, API, worker e Qdrant populado com decisões reais.
 
   cp .env.example .env
   docker compose up -d --build
-  # após API subir (create_all) e com tabelas base:
-  alembic upgrade head
-  python scripts/seed_cases.py
+  python scripts/import_qdrant.py casos_com_embeddings.json --reset
   python scripts/test_integration.py
 """
 
