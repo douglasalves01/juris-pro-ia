@@ -28,7 +28,11 @@ def _resolve_submodel_path(models_dir: str, name: str) -> Path:
 
 
 def _move_model_to_device(model: torch.nn.Module, device: torch.device) -> torch.nn.Module:
-    model = model.to(device)
+    try:
+        model = model.to(device)
+    except NotImplementedError:
+        # Meta tensors (lazy-loaded) — precisa materializar primeiro
+        model = model.to_empty(device=device)
     if device.type == "cuda":
         model = model.half()
     return model

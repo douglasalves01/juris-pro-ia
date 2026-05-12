@@ -1390,6 +1390,125 @@ async def health():
     return {"status": "ok", "models_loaded": loaded}
 
 
+@app.get("/cases")
+async def list_cases(
+    page: int = 1,
+    limit: int = 50,
+    tipo: str | None = None,
+    tribunal: str | None = None,
+):
+    """Lista casos da biblioteca jurídica (Qdrant). O backend usa para popular o Postgres."""
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Filter, FieldCondition, MatchValue, ScrollRequest
+
+    host = os.getenv("QDRANT_HOST", "localhost")
+    port = int(os.getenv("QDRANT_PORT", "6333"))
+    client = QdrantClient(host=host, port=port)
+
+    collection = "casos_juridicos"
+    try:
+        info = client.get_collection(collection)
+        total = info.points_count
+    except Exception:
+        return {"cases": [], "total": 0, "page": page, "limit": limit}
+
+    # Filtros opcionais
+    conditions = []
+    if tipo:
+        conditions.append(FieldCondition(key="tipo", match=MatchValue(value=tipo)))
+    if tribunal:
+        conditions.append(FieldCondition(key="tribunal", match=MatchValue(value=tribunal)))
+
+    scroll_filter = Filter(must=conditions) if conditions else None
+
+    # Qdrant scroll usa cursor (offset é o ID do último ponto da página anterior)
+    # Para simular paginação por número, fazemos scroll sequencial
+    # Se page > 1, precisamos pular (page-1)*limit registros
+    offset_id = None
+    if page > 1:
+        skip = (page - 1) * limit
+        # Scroll para pular registros anteriores
+        skipped = 0
+        while skipped < skip:
+            batch_size = min(100, skip - skipped)
+            skip_results, next_offset = client.scroll(
+                collection_name=collection,
+                scroll_filter=scroll_filter,
+                limit=batch_size,
+                offset=offset_id,
+                with_payload=False,
+                with_vectors=False,
+            )
+            if not skip_results:
+                break
+            skipped += len(skip_results)
+            offset_id = skip_results[-1].id
+
+    results, _next = client.scroll(
+        collection_name=collection,
+        scroll_filter=scroll_filter,
+        limit=limit,
+        offset=offset_id,
+        with_payload=True,
+        with_vectors=False,
+    )
+
+    cases = []
+    for point in results:
+        payload = point.payload or {}
+        resumo = payload.get("resumo", "")
+        tipo = payload.get("tipo", "")
+
+        # Tenta extrair ano do texto
+        import re
+        year_match = re.search(r"\b(19|20)\d{2}\b", resumo)
+        year = int(year_match.group()) if year_match else None
+
+        # Tenta extrair número do processo
+        number_match = re.search(r"\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}", resumo)
+        number = number_match.group() if number_match else None
+
+        # Tags derivadas do tipo
+        tags = [tipo] if tipo and tipo != "Outros" else []
+
+        cases.append({
+            "id": str(point.id),
+            "tribunal": payload.get("tribunal", ""),
+            "number": number,
+            "tipo": tipo,
+            "area": tipo,
+            "outcome": payload.get("outcome", ""),
+            "titulo": payload.get("titulo", ""),
+            "resumo": resumo,
+            "year": year,
+            "tags": tags,
+            "relevance": None,
+        })
+
+    return {"cases": cases, "total": total, "page": page, "limit": limit}
+
+
+@app.get("/cases/stats")
+async def cases_stats():
+    """Estatísticas da biblioteca de casos."""
+    from qdrant_client import QdrantClient
+
+    host = os.getenv("QDRANT_HOST", "localhost")
+    port = int(os.getenv("QDRANT_PORT", "6333"))
+    client = QdrantClient(host=host, port=port)
+
+    collection = "casos_juridicos"
+    try:
+        info = client.get_collection(collection)
+        return {
+            "total": info.points_count,
+            "collection": collection,
+            "status": "available",
+        }
+    except Exception:
+        return {"total": 0, "collection": collection, "status": "unavailable"}
+
+
 @app.get("/metrics/pipeline", response_model=PipelineMetricsResponse)
 async def pipeline_metrics():
     return {

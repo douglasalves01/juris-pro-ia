@@ -1,58 +1,75 @@
-services:
-  rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    restart: unless-stopped
+# docker-compose para desenvolvimento local do microserviço de IA.
+# RabbitMQ é infraestrutura do backend — aqui a gente só se conecta nele.
 
+services:
   qdrant:
     image: qdrant/qdrant:latest
     ports:
       - "6333:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     restart: unless-stopped
+    networks:
+      - jurispro-net
 
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
       - ./hf_models:/app/hf_models:ro
+    env_file: .env
     environment:
-      MODELS_DIR: /app/hf_models
-      MAX_UPLOAD_BYTES: "52428800"
-      CORS_ORIGINS: "*"
-      QDRANT_HOST: qdrant
-      QDRANT_PORT: "6333"
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
+      JURISPRO_SKIP_PRELOAD: "true"
     depends_on:
-      - rabbitmq
       - qdrant
+    deploy:
+      resources:
+        limits:
+          memory: 4G
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 30s
+    networks:
+      - jurispro-net
 
   worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: python -m workers.rabbitmq_worker
     volumes:
       - ./hf_models:/app/hf_models:ro
+      - jurispro_contracts:/app/storage/contracts:ro
+    env_file: .env
     environment:
-      MODELS_DIR: /app/hf_models
-      MAX_UPLOAD_BYTES: "52428800"
-      QDRANT_HOST: qdrant
-      QDRANT_PORT: "6333"
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
+      JURISPRO_SKIP_PRELOAD: "true"
     depends_on:
-      - rabbitmq
       - qdrant
+    deploy:
+      resources:
+        limits:
+          memory: 4G
     restart: unless-stopped
+    networks:
+      - jurispro-net
 
 volumes:
   qdrant_data:
+  jurispro_contracts:
+    name: juris-pro-api_jurispro_contracts
+    external: true
+
+networks:
+  jurispro-net:
+    external: true

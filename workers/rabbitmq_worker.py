@@ -1,16 +1,13 @@
-"""Worker RabbitMQ — consome jobs de análise publicados pelo NestJS.
+"""Worker RabbitMQ — consome jobs de análise publicados pelo backend NestJS.
 
 Fluxo:
-  NestJS → publica em "jurispro.analysis" (exchange: direct)
+  NestJS → publica em fila "jurispro.jobs.analysis.requests"
   Worker → consome, processa com o pipeline de IA
-  Worker → publica resultado em "jurispro.results" (exchange: direct)
+  Worker → publica resultado no exchange "jurispro.jobs" com routing key "analysis.results"
   NestJS → consome o resultado e persiste/notifica o cliente
 
 Execução:
   python -m workers.rabbitmq_worker
-
-Variáveis de ambiente:
-  RABBITMQ_URL  — ex: amqp://guest:guest@rabbitmq:5672//
 """
 
 from __future__ import annotations
@@ -23,6 +20,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import aio_pika
 import aio_pika.abc
@@ -31,47 +29,164 @@ logger = logging.getLogger(__name__)
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672//")
 
-# Filas
-QUEUE_ANALYSIS = "jurispro.analysis"       # NestJS → Worker (jobs de análise)
-QUEUE_KNOWLEDGE = "jurispro.knowledge"     # NestJS → Worker (ingestão RAG)
-QUEUE_MONITOR = "jurispro.monitor"         # NestJS → Worker (scan de jurisprudência)
-QUEUE_RESULTS = "jurispro.results"         # Worker → NestJS (resultados)
+# Fila que o NestJS publica (a gente consome)
+QUEUE_REQUESTS = "jurispro.jobs.analysis.requests"
+
+# Exchange e routing key para publicar resultado (NestJS consome)
+EXCHANGE_JOBS = "jurispro.jobs"
+ROUTING_KEY_RESULTS = "analysis.results"
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _format_success_result(
+    job_id: str,
+    firm_id: str | None,
+    contract_id: str,
+    analysis: Any,
+    duration_ms: int,
+) -> dict[str, Any]:
+    """Formata o resultado no formato que o backend espera."""
+    # Attention points
+    attention_points = []
+    for ap in (analysis.attention_points or []):
+        attention_points.append({
+            "severity": ap.severidade,
+            "clause": ap.clausula_referencia,
+            "description": ap.descricao,
+            "page": None,
+        })
+
+    # Entities
+    entities = []
+    ent = analysis.entities
+    for name in (ent.pessoas or []):
+        entities.append({"type": "PARTE", "value": name, "confidence": 0.85})
+    for org in (ent.organizacoes or []):
+        entities.append({"type": "ORGANIZACAO", "value": org, "confidence": 0.85})
+    for leg in (ent.legislacao or []):
+        entities.append({"type": "LEGISLACAO", "value": leg, "confidence": 0.80})
+    for data in (ent.datas or []):
+        entities.append({"type": "DATA", "value": data, "confidence": 0.80})
+    for valor in (ent.valores or []):
+        entities.append({"type": "VALOR", "value": valor, "confidence": 0.80})
+
+    # Similar cases
+    similar_cases = []
+    for sc in (analysis.similar_cases or []):
+        similar_cases.append({
+            "caseId": sc.id if sc.id else None,
+            "tribunal": sc.tribunal,
+            "number": sc.number,
+            "similarity": sc.similaridade,
+            "outcome": sc.outcome,
+            "summary": sc.resumo,
+        })
+
+    # AI Trace
+    from api.ml.pipeline import AnalysisPipeline
+    pipeline = AnalysisPipeline()
+    ext_trace = pipeline.last_external_trace
+    steps = []
+    for step in pipeline.last_steps:
+        steps.append({
+            "step": step.get("step", "unknown"),
+            "provider": step.get("provider", "internal"),
+            "model": step.get("model"),
+            "latencyMs": step.get("durationMs", 0),
+        })
+
+    ai_trace = {
+        "pipelineVersion": "3.0.0",
+        "provider": ext_trace.get("provider") or "internal",
+        "model": ext_trace.get("model") or "jurispro-local",
+        "costCents": int((ext_trace.get("cost_usd") or 0) * 100),
+        "latencyMs": duration_ms,
+        "steps": steps,
+    }
+
+    return {
+        "jobId": job_id,
+        "firmId": firm_id or "",
+        "contractId": contract_id,
+        "success": True,
+        "result": {
+            "riskScore": analysis.risk_score,
+            "riskLevel": analysis.risk_level.upper(),
+            "summary": analysis.executive_summary,
+            "mainRisks": analysis.main_risks,
+            "positivePoints": analysis.positive_points,
+            "recommendations": analysis.recommendations,
+            "feeMin": analysis.fee_estimate_min,
+            "feeSuggested": analysis.fee_estimate_suggested,
+            "feeMax": analysis.fee_estimate_max,
+            "outcomeProb": analysis.win_probability,
+            "attentionPoints": attention_points,
+            "entities": entities,
+            "similarCases": similar_cases,
+            "aiTrace": ai_trace,
+        },
+    }
+
+
+def _format_error_result(
+    job_id: str,
+    firm_id: str | None,
+    contract_id: str,
+    error_message: str,
+) -> dict[str, Any]:
+    """Formata erro no formato que o backend espera (error como string)."""
+    return {
+        "jobId": job_id,
+        "firmId": firm_id or "",
+        "contractId": contract_id,
+        "success": False,
+        "error": error_message,
+    }
+
+
 async def _publish_result(
     channel: aio_pika.abc.AbstractChannel,
+    exchange: aio_pika.abc.AbstractExchange,
     result: dict,
 ) -> None:
-    """Publica o resultado na fila de retorno para o NestJS consumir."""
-    await channel.default_exchange.publish(
+    """Publica o resultado no exchange jurispro.jobs com routing key analysis.results."""
+    await exchange.publish(
         aio_pika.Message(
             body=json.dumps(result, ensure_ascii=False, default=str).encode(),
             content_type="application/json",
             delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
         ),
-        routing_key=QUEUE_RESULTS,
+        routing_key=ROUTING_KEY_RESULTS,
     )
 
 
 async def _handle_analysis(
     message: aio_pika.abc.AbstractIncomingMessage,
     channel: aio_pika.abc.AbstractChannel,
+    exchange: aio_pika.abc.AbstractExchange,
 ) -> None:
     """Processa um job de análise de documento."""
-    async with message.process(requeue_on_error=True):
+    async with message.process():
         body = json.loads(message.body.decode())
-        job_id = str(body.get("jobId") or uuid.uuid4())
+        job_id = str(body.get("jobId") or body.get("id") or uuid.uuid4())
         contract_id = str(body.get("contractId") or "")
         regiao = str(body.get("regiao") or "SP")
         mode = str(body.get("mode") or "standard")
         firm_id = body.get("firmId")
-        # Texto direto ou caminho de arquivo temporário
         text: str | None = body.get("text")
-        tmp_path: str | None = body.get("tmpPath")
+        file_path: str | None = body.get("filePath")
+
+        # O backend manda filePath relativo ou absoluto
+        # No nosso container resolve para /app/storage/contracts/{filePath}
+        if file_path:
+            if file_path.startswith("/app/") and not Path(file_path).exists():
+                relative = file_path[len("/app/"):]
+                file_path = f"/app/storage/contracts/{relative}"
+            elif not file_path.startswith("/"):
+                file_path = f"/app/storage/contracts/{file_path}"
 
         started_at = _utc_now()
         t0 = time.perf_counter()
@@ -80,111 +195,60 @@ async def _handle_analysis(
 
         from api.ml.pipeline import AnalysisPipeline, AnalysisResult
         from api.ml.text_extractor import TextExtractor
-        from api.main import (
-            _build_analysis_response,
-            _classify_pipeline_failure,
-            _error_payload,
-            _http_error_contract,
-            _maybe_debug_detail,
-        )
 
         pipeline = AnalysisPipeline()
         extractor = TextExtractor()
 
-        # Extração de texto se veio arquivo
-        if not text and tmp_path:
+        # Extração de texto se veio caminho de arquivo
+        if not text and file_path:
             try:
-                text = extractor.extract(tmp_path)
+                text = extractor.extract(file_path)
             except Exception as exc:
                 logger.warning("Job %s: falha na extração: %s", job_id, exc)
-                code, retryable, msg = _http_error_contract(422, str(exc))
-                result = _error_payload(
-                    job_id=job_id, contract_id=contract_id,
-                    code=code, message=msg, retryable=retryable,
-                    detail=_maybe_debug_detail(exc),
-                    started_at=started_at, finished_at=_utc_now(),
-                    duration_ms=int((time.perf_counter() - t0) * 1000),
-                    mode=mode, trace_step="extract_text",
-                )
-                await _publish_result(channel, result)
+                result = _format_error_result(job_id, firm_id, contract_id, str(exc))
+                await _publish_result(channel, exchange, result)
                 return
-            finally:
-                if tmp_path:
-                    Path(tmp_path).unlink(missing_ok=True)
 
         if not text or not text.strip():
-            code, retryable, msg = _http_error_contract(422, "Nenhum texto extraído.")
-            result = _error_payload(
-                job_id=job_id, contract_id=contract_id,
-                code=code, message=msg, retryable=retryable,
-                detail=None, started_at=started_at, finished_at=_utc_now(),
-                duration_ms=int((time.perf_counter() - t0) * 1000),
-                mode=mode, trace_step="extract_text",
+            result = _format_error_result(
+                job_id, firm_id, contract_id,
+                "Nenhum texto extraído do arquivo.",
             )
-            await _publish_result(channel, result)
+            await _publish_result(channel, exchange, result)
             return
 
         # Pipeline de IA
         try:
+            firm_uuid = None
+            if firm_id:
+                try:
+                    firm_uuid = uuid.UUID(str(firm_id))
+                except ValueError:
+                    firm_uuid = None
+
             analysis: AnalysisResult = pipeline.analyze(
                 text,
                 regiao=regiao,
                 mode=mode,
-                firm_id=uuid.UUID(str(firm_id)) if firm_id else None,
+                firm_id=firm_uuid,
             )
         except Exception as exc:
             logger.exception("Job %s: falha no pipeline", job_id)
-            code, retryable, msg = _classify_pipeline_failure(exc)
-            result = _error_payload(
-                job_id=job_id, contract_id=contract_id,
-                code=code, message=msg, retryable=retryable,
-                detail=_maybe_debug_detail(exc),
-                started_at=started_at, finished_at=_utc_now(),
-                duration_ms=int((time.perf_counter() - t0) * 1000),
-                mode=mode, trace_step="pipeline",
-            )
-            await _publish_result(channel, result)
+            result = _format_error_result(job_id, firm_id, contract_id, str(exc))
+            await _publish_result(channel, exchange, result)
             return
 
-        finished_at = _utc_now()
-        result = _build_analysis_response(
-            result=analysis,
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+
+        result = _format_success_result(
             job_id=job_id,
+            firm_id=firm_id,
             contract_id=contract_id,
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_ms=int((time.perf_counter() - t0) * 1000),
-            mode=mode,
+            analysis=analysis,
+            duration_ms=duration_ms,
         )
-        await _publish_result(channel, result)
+        await _publish_result(channel, exchange, result)
         logger.info("Job %s concluído em %.1fs", job_id, time.perf_counter() - t0)
-
-
-async def _handle_knowledge(
-    message: aio_pika.abc.AbstractIncomingMessage,
-    channel: aio_pika.abc.AbstractChannel,
-) -> None:
-    """Processa ingestão de documentos no RAG privado do escritório."""
-    async with message.process(requeue_on_error=True):
-        body = json.loads(message.body.decode())
-        firm_id = str(body.get("firmId") or "")
-        documents = body.get("documents") or []
-        from api.services.private_knowledge import ingest_documents
-        count = ingest_documents(firm_id, documents)
-        logger.info("RAG: %d documentos indexados para firm %s", count, firm_id)
-
-
-async def _handle_monitor(
-    message: aio_pika.abc.AbstractIncomingMessage,
-    channel: aio_pika.abc.AbstractChannel,
-) -> None:
-    """Processa scan de novas decisões jurisprudenciais."""
-    async with message.process(requeue_on_error=True):
-        body = json.loads(message.body.decode())
-        decisions = body.get("decisions") or []
-        from api.main import process_monitor_decisions
-        count = len(process_monitor_decisions(decisions))
-        logger.info("Monitor: %d alertas gerados", count)
 
 
 async def main() -> None:
@@ -194,20 +258,22 @@ async def main() -> None:
     connection = await aio_pika.connect_robust(RABBITMQ_URL)
     async with connection:
         channel = await connection.channel()
-        await channel.set_qos(prefetch_count=1)  # processa um job por vez por worker
+        await channel.set_qos(prefetch_count=1)
 
-        # Declara filas duráveis
-        q_analysis = await channel.declare_queue(QUEUE_ANALYSIS, durable=True)
-        q_knowledge = await channel.declare_queue(QUEUE_KNOWLEDGE, durable=True)
-        q_monitor = await channel.declare_queue(QUEUE_MONITOR, durable=True)
-        await channel.declare_queue(QUEUE_RESULTS, durable=True)
+        # Declara o exchange (direct) — mesmo que o NestJS já tenha criado
+        exchange = await channel.declare_exchange(
+            EXCHANGE_JOBS, aio_pika.ExchangeType.DIRECT, durable=True
+        )
 
-        await q_analysis.consume(lambda msg: _handle_analysis(msg, channel))
-        await q_knowledge.consume(lambda msg: _handle_knowledge(msg, channel))
-        await q_monitor.consume(lambda msg: _handle_monitor(msg, channel))
+        # Declara a fila e faz bind no exchange
+        queue = await channel.declare_queue(QUEUE_REQUESTS, durable=True)
+        await queue.bind(exchange, routing_key="analysis.requests")
 
-        logger.info("Worker aguardando mensagens. Ctrl+C para parar.")
-        await asyncio.Future()  # roda indefinidamente
+        # Consome
+        await queue.consume(lambda msg: _handle_analysis(msg, channel, exchange))
+
+        logger.info("Worker escutando fila '%s'. Ctrl+C para parar.", QUEUE_REQUESTS)
+        await asyncio.Future()
 
 
 if __name__ == "__main__":

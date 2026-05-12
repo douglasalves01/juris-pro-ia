@@ -112,7 +112,7 @@ def predict(
             "similar_cases": [],
             "similar_cases_notice": (
                 "Coleção Qdrant 'casos_juridicos' indisponível ou vazia. "
-                "Importe decisões reais com scripts/fetch_datajud.py, scripts/ingest_casos.py "
+                "Importe decisões com scripts/ingest_casos.py "
                 "ou scripts/import_qdrant.py."
             ),
         }
