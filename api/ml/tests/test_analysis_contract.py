@@ -109,7 +109,67 @@ def test_build_analysis_response_valida_schema_e_preserva_similar_case() -> None
     assert parsed.result.attentionPoints[0].severity == "medium"
     assert parsed.result.similarCases[0].tribunal == "TJSP"
     assert parsed.result.similarCases[0].number == "123"
+    assert parsed.result.outcomeProbability.value == 0.92
+    assert parsed.result.outcomeProbability.rationale == "ganhou"
+    assert parsed.result.outcomeProbability.confidence == 0.95
     assert parsed.result.urgency is not None
     assert parsed.result.urgency.level == "BAIXO"
     assert parsed.result.compliance[0].regulation == "LGPD"
     assert parsed.result.compliance[0].items[0].status == "ok"
+    assert parsed.result.finalOpinion is not None
+    assert parsed.result.finalOpinion.mainRisks == ["Risco principal."]
+    assert parsed.result.finalOpinion.recommendations == ["Recomendação."]
+    assert parsed.result.finalOpinion.positivePoints == ["Ponto positivo."]
+
+
+def test_build_analysis_response_garante_blocos_obrigatorios_do_parecer() -> None:
+    result = _sample_result()
+    result.main_risks = []
+    result.recommendations = []
+    result.positive_points = []
+    mock_p = MagicMock()
+    mock_p.last_steps = []
+    mock_p.last_external_trace = {}
+    app.state.pipeline = mock_p
+
+    payload = _build_analysis_response(
+        result=result,
+        job_id="job-1",
+        contract_id="contract-1",
+        started_at="2026-04-20T00:00:00+00:00",
+        finished_at="2026-04-20T00:00:01+00:00",
+        duration_ms=1000,
+        mode="standard",
+    )
+
+    parsed = AnalysisResponse.model_validate(payload)
+    assert parsed.result.finalOpinion is not None
+    assert parsed.result.finalOpinion.mainRisks
+    assert parsed.result.finalOpinion.recommendations
+    assert parsed.result.finalOpinion.positivePoints
+
+
+def test_build_analysis_response_garante_previsao_de_desfecho() -> None:
+    result = _sample_result()
+    result.win_prediction = ""
+    result.win_probability = 1.7
+    result.win_confidence = -0.2
+    mock_p = MagicMock()
+    mock_p.last_steps = []
+    mock_p.last_external_trace = {}
+    app.state.pipeline = mock_p
+
+    payload = _build_analysis_response(
+        result=result,
+        job_id="job-1",
+        contract_id="contract-1",
+        started_at="2026-04-20T00:00:00+00:00",
+        finished_at="2026-04-20T00:00:01+00:00",
+        duration_ms=1000,
+        mode="standard",
+    )
+
+    parsed = AnalysisResponse.model_validate(payload)
+    assert parsed.result.outcomeProbability.rationale == "inconclusivo"
+    assert parsed.result.outcomeProbability.value == 1.0
+    assert parsed.result.outcomeProbability.confidence == 0.0

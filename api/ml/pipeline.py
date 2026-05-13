@@ -181,6 +181,11 @@ def _derive_main_risks(
             "Sem alertas automáticos de cláusulas contratuais nesta peça; priorizar mérito, "
             "provas e riscos processuais na revisão humana."
         )
+    if not lines:
+        lines.append(
+            f"Nenhum risco crítico foi identificado automaticamente; manter revisão jurídica proporcional "
+            f"ao nível {risk_level} ({risk_score}/100)."
+        )
     return lines[:15]
 
 
@@ -279,6 +284,38 @@ def _derive_positive_points(
     if not out:
         out.append("Texto processado integralmente; utilize os campos de risco e entidades para revisão.")
     return out
+
+
+def _fallback_fields_needed(
+    *,
+    executive_summary: str,
+    main_risks: list[str],
+    recommendations: list[str],
+    positive_points: list[str],
+    win_prediction: str,
+    win_confidence: float,
+    outcome_probs: dict[str, float],
+) -> list[str]:
+    missing: list[str] = []
+    if not executive_summary.strip():
+        missing.append("executive_summary")
+    generic_risk_fragments = (
+        "Sem alertas automáticos de cláusulas contratuais",
+        "Nenhum risco crítico foi identificado automaticamente",
+    )
+    has_only_generic_risks = bool(main_risks) and all(
+        any(fragment in risk for fragment in generic_risk_fragments)
+        for risk in main_risks
+    )
+    if not main_risks or has_only_generic_risks:
+        missing.append("main_risks")
+    if not recommendations:
+        missing.append("recommendations")
+    if not positive_points:
+        missing.append("positive_points")
+    if (win_prediction or "").strip().lower() == "inconclusivo":
+        missing.append("outcome_probability")
+    return missing
 
 
 class AnalysisPipeline:
@@ -724,6 +761,70 @@ class AnalysisPipeline:
         )
         self._record_step(steps, "validate_output", s0, model="rules", confidence=0.85)
 
+        fallback_fields = _fallback_fields_needed(
+            executive_summary=executive_summary,
+            main_risks=main_risks,
+            recommendations=recommendations,
+            positive_points=positive_points,
+            win_prediction=win_prediction,
+            win_confidence=win_confidence,
+            outcome_probs=outcome_probs,
+        )
+        if fallback_fields:
+            s_fallback = time.perf_counter()
+            fallback, _ = external_llm.complete_analysis_fallback(
+                api_key=settings.gemini_api_key,
+                model=str(settings.gemini_model),
+                missing_fields=fallback_fields,
+                executive_summary=executive_summary,
+                main_risks=main_risks,
+                recommendations=recommendations,
+                positive_points=positive_points,
+                contract_type=contract_type,
+                risk_level=risk_level,
+                risk_score=risk_score,
+                win_prediction=win_prediction,
+                win_probability=win_probability,
+                document_kind=document_kind,
+                excerpt=rep,
+            )
+            if fallback.used:
+                if "executive_summary" in fallback_fields and fallback.executive_summary:
+                    executive_summary = fallback.executive_summary
+                if "main_risks" in fallback_fields and fallback.main_risks:
+                    main_risks = fallback.main_risks
+                if "recommendations" in fallback_fields and fallback.recommendations:
+                    recommendations = fallback.recommendations
+                if "positive_points" in fallback_fields and fallback.positive_points:
+                    positive_points = fallback.positive_points
+                if "outcome_probability" in fallback_fields:
+                    if fallback.outcome_rationale:
+                        win_prediction = fallback.outcome_rationale
+                    if fallback.outcome_probability is not None:
+                        win_probability = fallback.outcome_probability
+                    if fallback.outcome_confidence is not None:
+                        win_confidence = fallback.outcome_confidence
+                    if fallback.outcome_probability is not None:
+                        outcome_probs = {
+                            "ganhou": fallback.outcome_probability,
+                            "inconclusivo": max(0.0, 1.0 - fallback.outcome_probability),
+                        }
+                self._last_external_used = True
+                self._last_external_provider = "gemini"
+                self._last_external_model = fallback.model
+                self._last_external_cost_usd += fallback.cost_usd
+                self._record_step(
+                    steps,
+                    "gemini_fallback",
+                    s_fallback,
+                    provider="gemini",
+                    model=fallback.model,
+                    confidence=0.65,
+                    input_tokens=fallback.input_tokens,
+                    output_tokens=fallback.output_tokens,
+                    estimated_cost_usd=fallback.cost_usd,
+                )
+
         s_llm = time.perf_counter()
         should_try_llm = external_llm.should_invoke_external_llm(
             mode,
@@ -761,9 +862,9 @@ class AnalysisPipeline:
                 semantic_cache.put(f"{mode}:{contract_type}", mode, contract_type, rep, enrich.text)
         if enrich.used:
             self._last_external_used = True
-            self._last_external_provider = "internal" if enrich.model == "semantic-cache" else "openai"
+            self._last_external_provider = "internal" if enrich.model == "semantic-cache" else "gemini"
             self._last_external_model = enrich.model
-            self._last_external_cost_usd = enrich.cost_usd
+            self._last_external_cost_usd += enrich.cost_usd
             executive_summary = (
                 executive_summary
                 + "\n\n---\nParecer complementar (IA generativa): "

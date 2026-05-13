@@ -304,6 +304,60 @@ def _normalize_risk_level(level: str) -> str:
     return mapping.get(normalized, "MEDIO")
 
 
+def _non_empty_section(items: list[str] | None, fallback: str) -> list[str]:
+    cleaned = [str(item).strip() for item in (items or []) if str(item).strip()]
+    return cleaned or [fallback]
+
+
+def _probability(value: float | int | None, fallback: float) -> float:
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        probability = fallback
+    return max(0.0, min(1.0, probability))
+
+
+def _analysis_response_log_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    trace = payload.get("trace") if isinstance(payload.get("trace"), dict) else {}
+    document = result.get("document") if isinstance(result.get("document"), dict) else {}
+    final_opinion = result.get("finalOpinion") if isinstance(result.get("finalOpinion"), dict) else {}
+    return {
+        "jobId": payload.get("jobId"),
+        "contractId": payload.get("contractId"),
+        "status": payload.get("status"),
+        "document": {
+            "type": document.get("type"),
+            "legalArea": document.get("legalArea"),
+            "language": document.get("language"),
+            "textQuality": document.get("textQuality"),
+        },
+        "risk": result.get("risk"),
+        "outcomeProbability": result.get("outcomeProbability"),
+        "finalOpinion": {
+            "title": final_opinion.get("title"),
+            "mainRisks": final_opinion.get("mainRisks"),
+            "recommendations": final_opinion.get("recommendations"),
+            "positivePoints": final_opinion.get("positivePoints"),
+        },
+        "counts": {
+            "attentionPoints": len(result.get("attentionPoints") or []),
+            "entities": len(result.get("entities") or []),
+            "similarCases": len(result.get("similarCases") or []),
+            "compliance": len(result.get("compliance") or []),
+            "obligations": len(result.get("obligations") or []),
+        },
+        "trace": {
+            "mode": trace.get("mode"),
+            "externalApiUsed": trace.get("externalApiUsed"),
+            "externalProvider": trace.get("externalProvider"),
+            "externalModel": trace.get("externalModel"),
+            "durationMs": trace.get("durationMs"),
+            "steps": [step.get("step") for step in (trace.get("steps") or []) if isinstance(step, dict)],
+        },
+    }
+
+
 def _normalize_severity(severity: str) -> str:
     normalized = (severity or "").strip().lower()
     mapping = {
@@ -873,7 +927,22 @@ def _build_analysis_response(
     ]
 
     risk_level = _normalize_risk_level(result.risk_level)
-    risk_rationale = "; ".join(result.main_risks) if result.main_risks else result.risk_level
+    main_risks = _non_empty_section(
+        result.main_risks,
+        f"Nenhum risco crítico foi identificado automaticamente; revisar conforme nível {risk_level}.",
+    )
+    recommendations = _non_empty_section(
+        result.recommendations,
+        "Revisar o documento com apoio jurídico antes de qualquer decisão ou assinatura.",
+    )
+    positive_points = _non_empty_section(
+        result.positive_points,
+        "Documento processado com sucesso e estruturado para revisão jurídica.",
+    )
+    outcome_rationale = str(result.win_prediction or "inconclusivo").strip() or "inconclusivo"
+    outcome_probability = _probability(result.win_probability, 0.33)
+    outcome_confidence = _probability(result.win_confidence, outcome_probability)
+    risk_rationale = "; ".join(main_risks)
     pipeline = getattr(app.state, "pipeline", None)
     raw_steps = pipeline.last_steps if pipeline is not None else []
     ext_trace: dict[str, Any] = {}
@@ -897,7 +966,7 @@ def _build_analysis_response(
     trace["steps"] = _normalize_trace_steps(raw_steps, duration_ms)
     record_pipeline_metrics(trace["steps"])
 
-    return {
+    response_payload = {
         "jobId": job_id,
         "contractId": contract_id,
         "status": "done",
@@ -926,9 +995,9 @@ def _build_analysis_response(
                 "rationale": "Estimativa automática baseada em área jurídica, região e risco.",
             },
             "outcomeProbability": {
-                "value": result.win_probability,
-                "rationale": result.win_prediction,
-                "confidence": result.win_confidence,
+                "value": outcome_probability,
+                "rationale": outcome_rationale,
+                "confidence": outcome_confidence,
             },
             "urgency": {
                 "score": result.urgency.score,
@@ -964,12 +1033,19 @@ def _build_analysis_response(
                 "title": f"Parecer preliminar - {result.contract_type}",
                 "executiveSummary": result.executive_summary,
                 "legalAnalysis": risk_rationale,
-                "recommendations": result.recommendations,
+                "mainRisks": main_risks,
+                "recommendations": recommendations,
+                "positivePoints": positive_points,
                 "limitations": _final_opinion_limitations(mode, external_used=ext_used),
             },
         },
         "trace": trace,
     }
+    logger.info(
+        "analysis_response_to_backend=%s",
+        json.dumps(_analysis_response_log_payload(response_payload), ensure_ascii=False),
+    )
+    return response_payload
 
 
 def _final_opinion_limitations(mode: str, *, external_used: bool = False) -> list[str]:

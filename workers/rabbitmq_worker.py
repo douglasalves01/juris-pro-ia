@@ -41,6 +41,40 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _analysis_result_log_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    trace = result.get("aiTrace") if isinstance(result.get("aiTrace"), dict) else {}
+    return {
+        "jobId": payload.get("jobId"),
+        "firmId": payload.get("firmId"),
+        "contractId": payload.get("contractId"),
+        "success": payload.get("success"),
+        "risk": {
+            "score": result.get("riskScore"),
+            "level": result.get("riskLevel"),
+            "mainRisks": result.get("mainRisks"),
+        },
+        "outcome": {
+            "probability": result.get("outcomeProb"),
+            "rationale": result.get("outcomeRationale"),
+            "confidence": result.get("outcomeConfidence"),
+        },
+        "recommendations": result.get("recommendations"),
+        "positivePoints": result.get("positivePoints"),
+        "counts": {
+            "attentionPoints": len(result.get("attentionPoints") or []),
+            "entities": len(result.get("entities") or []),
+            "similarCases": len(result.get("similarCases") or []),
+        },
+        "trace": {
+            "provider": trace.get("provider"),
+            "model": trace.get("model"),
+            "latencyMs": trace.get("latencyMs"),
+            "steps": [step.get("step") for step in (trace.get("steps") or []) if isinstance(step, dict)],
+        },
+    }
+
+
 def _format_success_result(
     job_id: str,
     firm_id: str | None,
@@ -123,6 +157,8 @@ def _format_success_result(
             "feeSuggested": analysis.fee_estimate_suggested,
             "feeMax": analysis.fee_estimate_max,
             "outcomeProb": analysis.win_probability,
+            "outcomeRationale": analysis.win_prediction,
+            "outcomeConfidence": analysis.win_confidence,
             "attentionPoints": attention_points,
             "entities": entities,
             "similarCases": similar_cases,
@@ -246,6 +282,10 @@ async def _handle_analysis(
             contract_id=contract_id,
             analysis=analysis,
             duration_ms=duration_ms,
+        )
+        logger.info(
+            "analysis_result_to_backend=%s",
+            json.dumps(_analysis_result_log_payload(result), ensure_ascii=False),
         )
         await _publish_result(channel, exchange, result)
         logger.info("Job %s concluído em %.1fs", job_id, time.perf_counter() - t0)

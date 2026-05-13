@@ -16,7 +16,7 @@
         "status": { "const": "done" },
         "result": {
           "type": "object",
-          "required": ["document", "risk", "attentionPoints", "entities", "similarCases"],
+          "required": ["document", "risk", "attentionPoints", "entities", "similarCases", "outcomeProbability"],
           "properties": {
             "document": {
               "type": "object",
@@ -143,7 +143,8 @@
       }
     },
     "outcomeProbability": {
-      "type": ["object", "null"],
+      "type": "object",
+      "required": ["value", "rationale", "confidence"],
       "properties": {
         "value": { "type": "number", "minimum": 0, "maximum": 1 },
         "rationale": { "type": ["string", "null"] },
@@ -152,11 +153,14 @@
     },
     "finalOpinion": {
       "type": ["object", "null"],
+      "required": ["title", "executiveSummary", "legalAnalysis", "mainRisks", "recommendations", "positivePoints", "limitations"],
       "properties": {
         "title": { "type": "string" },
         "executiveSummary": { "type": "string" },
         "legalAnalysis": { "type": "string" },
-        "recommendations": { "type": "array", "items": { "type": "string" } },
+        "mainRisks": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "recommendations": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "positivePoints": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
         "limitations": { "type": "array", "items": { "type": "string" } }
       }
     },

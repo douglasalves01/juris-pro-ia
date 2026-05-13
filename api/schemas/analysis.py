@@ -103,7 +103,9 @@ class FinalOpinion(BaseModel):
     title: str
     executiveSummary: str
     legalAnalysis: str
-    recommendations: list[str]
+    mainRisks: list[str] = Field(min_length=1)
+    recommendations: list[str] = Field(min_length=1)
+    positivePoints: list[str] = Field(min_length=1)
     limitations: list[str]
 
 
@@ -114,7 +116,7 @@ class AnalysisPayload(BaseModel):
     entities: list[EntityItem]
     similarCases: list[SimilarCaseItem]
     fees: FeesEstimate | None = None
-    outcomeProbability: OutcomeProbability | None = None
+    outcomeProbability: OutcomeProbability
     urgency: UrgencyPayload | None = None
     compliance: list[CompliancePayload] = Field(default_factory=list)
     obligations: list[ObligationPayload] = Field(default_factory=list)
