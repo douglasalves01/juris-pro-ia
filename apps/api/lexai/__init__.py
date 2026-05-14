@@ -1,0 +1,1 @@
+"""LexAI FastAPI application package."""

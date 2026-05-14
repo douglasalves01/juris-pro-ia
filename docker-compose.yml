@@ -64,8 +64,73 @@ services:
     networks:
       - jurispro-net
 
+  # --- LexAI (perfil opcional): FastAPI + Postgres + Redis ---
+  # Uso: docker compose --profile lexai up -d
+  lexai-postgres:
+    profiles: ["lexai"]
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: lexai
+      POSTGRES_PASSWORD: lexai
+      POSTGRES_DB: lexai
+    ports:
+      - "5433:5432"
+    volumes:
+      - lexai_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lexai -d lexai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - jurispro-net
+
+  lexai-redis:
+    profiles: ["lexai"]
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - lexai_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - jurispro-net
+
+  lexai-api:
+    profiles: ["lexai"]
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    ports:
+      - "8100:8100"
+    env_file:
+      - .env.lexai
+    environment:
+      DATABASE_URL: postgresql://lexai:lexai@lexai-postgres:5432/lexai
+      REDIS_URL: redis://lexai-redis:6379/0
+      # Ajuste para a URL do frontend no outro repositório (ou use .env.lexai).
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      LEXAI_AUTH_DISABLED: "true"
+    depends_on:
+      lexai-postgres:
+        condition: service_healthy
+      lexai-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - jurispro-net
+
 volumes:
   qdrant_data:
+  lexai_pg_data:
+  lexai_redis_data:
   jurispro_contracts:
     name: juris-pro-api_jurispro_contracts
     external: true

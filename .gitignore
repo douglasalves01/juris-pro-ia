@@ -37,6 +37,7 @@ virtualenv/
 .env
 .env.*
 !.env.example
+!.env.lexai
 *.pem
 *.key
 secrets.json
@@ -135,3 +136,7 @@ comando.txt
 .codex
 .agents
 .kiro
+node_modules
+.next/
+out/
+packages/*/dist/
